@@ -4,25 +4,30 @@ const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot online'));
 
-// ✅ Railway usa PORT dinâmica
 const WEB_PORT = process.env.PORT || 3000;
 app.listen(WEB_PORT, () => console.log('Web running on port', WEB_PORT));
+
+function parseMCVersion(v) {
+  if (!v) return '1.21.1'; // ✅ padrão fixo (mais estável no Railway)
+  const s = String(v).trim().toLowerCase();
+  if (s === 'false' || s === 'auto' || s === 'detect') return '1.21.1'; // evita autoVersion bugando
+  return v;
+}
 
 const config = {
   host: process.env.MC_HOST || 'SquadSuper.aternos.me',
   port: Number(process.env.MC_PORT || 53867),
   username: process.env.MC_USER || 'Bot24horas',
-  version: process.env.MC_VERSION || false,
+  version: parseMCVersion(process.env.MC_VERSION),
 };
 
 let bot = null;
 let antiAfkInterval = null;
 let reconnectTimer = null;
 
-// backoff (pra não tomar "Connection throttled")
 let attempts = 0;
-const BASE_DELAY = 10_000; // 10s
-const MAX_DELAY = 180_000; // 3min
+const BASE_DELAY = 10_000;
+const MAX_DELAY = 180_000;
 
 function stopAntiAfk() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
@@ -51,12 +56,11 @@ function startAntiAfk() {
         true
       );
     }
-  }, 20_000); // ✅ mais leve (20s)
+  }, 20_000);
 }
 
 function cleanupBot() {
   stopAntiAfk();
-
   if (bot) {
     try {
       bot.removeAllListeners();
@@ -67,7 +71,7 @@ function cleanupBot() {
 }
 
 function scheduleReconnect(reason) {
-  if (reconnectTimer) return; // ✅ não duplica reconect
+  if (reconnectTimer) return;
 
   cleanupBot();
 
@@ -87,17 +91,19 @@ function scheduleReconnect(reason) {
 function createBot() {
   if (reconnectTimer) return;
 
-  console.log(`Conectando em ${config.host}:${config.port}...`);
+  console.log(`Conectando em ${config.host}:${config.port} (v${config.version})...`);
 
-  bot = mineflayer.createBot(config);
+  try {
+    bot = mineflayer.createBot(config);
+  } catch (e) {
+    return scheduleReconnect(e?.message || 'createBot error');
+  }
 
-  bot.once('login', () => {
-    console.log(`Logado como ${bot.username}`);
-  });
+  bot.once('login', () => console.log(`Logado como ${bot.username}`));
 
   bot.once('spawn', () => {
     console.log('Spawnado! Anti-AFK ligado.');
-    attempts = 0; // ✅ reset backoff quando estabiliza
+    attempts = 0;
     startAntiAfk();
   });
 
