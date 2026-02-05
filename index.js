@@ -8,7 +8,6 @@ const WEB_PORT = process.env.PORT || 3000;
 app.listen(WEB_PORT, () => console.log('Web running on port', WEB_PORT));
 
 function parseMCVersion(v) {
-  // ✅ FIXO: 1.21.11 (false/auto/detect dá crash pra você)
   if (!v) return '1.21.11';
   const s = String(v).trim().toLowerCase();
   if (s === 'false' || s === 'auto' || s === 'detect') return '1.21.11';
@@ -23,55 +22,21 @@ const config = {
 };
 
 let bot = null;
-let antiAfkInterval = null;
 let reconnectTimer = null;
 let spawnWatchdog = null;
 
-// ✅ Reconexão fixa em 15 segundos (não cresce)
 const RECONNECT_DELAY = 15_000;
+const SPAWN_TIMEOUT = 120_000; // Aternos pode demorar
 
-// ✅ Se não spawnar em 30s, reinicia (evita ficar “conectado” mas inútil)
-const SPAWN_TIMEOUT = 30_000;
-
-function stopAntiAfk() {
-  if (antiAfkInterval) clearInterval(antiAfkInterval);
-  antiAfkInterval = null;
-}
-
-function startAntiAfk() {
-  stopAntiAfk();
-
-  antiAfkInterval = setInterval(() => {
-    if (!bot || !bot.entity) return;
-
-    const action = Math.floor(Math.random() * 3);
-
-    if (action === 0) {
-      bot.setControlState('jump', true);
-      setTimeout(() => bot?.setControlState('jump', false), 200);
-    } else if (action === 1) {
-      const dir = Math.random() > 0.5 ? 'forward' : 'back';
-      bot.setControlState(dir, true);
-      setTimeout(() => bot?.setControlState(dir, false), 600);
-    } else {
-      bot.look(
-        bot.entity.yaw + (Math.random() - 0.5) * 0.4,
-        bot.entity.pitch,
-        true
-      );
-    }
-  }, 20_000);
-}
-
-function clearSpawnWatchdog() {
+function clearTimers() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   if (spawnWatchdog) clearTimeout(spawnWatchdog);
   spawnWatchdog = null;
 }
 
 function cleanupBot() {
-  stopAntiAfk();
-  clearSpawnWatchdog();
-
+  clearTimers();
   if (bot) {
     try {
       bot.removeAllListeners();
@@ -85,7 +50,6 @@ function scheduleReconnect(reason) {
   if (reconnectTimer) return;
 
   cleanupBot();
-
   console.log(`Caiu (${reason}). Reconectando em ${RECONNECT_DELAY}ms...`);
 
   reconnectTimer = setTimeout(() => {
@@ -94,9 +58,20 @@ function scheduleReconnect(reason) {
   }, RECONNECT_DELAY);
 }
 
-function createBot() {
-  if (reconnectTimer) return;
+function shouldPauseOnKick(reasonText) {
+  const t = (reasonText || '').toLowerCase();
+  // Motivos comuns que indicam bloqueio/idle/ToS → melhor NÃO ficar insistindo
+  return (
+    t.includes('idle') ||
+    t.includes('terms') ||
+    t.includes('tos') ||
+    t.includes('banned') ||
+    t.includes('ban') ||
+    t.includes('violate')
+  );
+}
 
+function createBot() {
   console.log(`Conectando em ${config.host}:${config.port} (v${config.version})...`);
 
   try {
@@ -105,8 +80,6 @@ function createBot() {
     return scheduleReconnect(e?.message || 'createBot error');
   }
 
-  // ✅ Watchdog: se não spawnar em 30s, força reinício
-  clearSpawnWatchdog();
   spawnWatchdog = setTimeout(() => {
     console.log(`⚠️ Não spawnou em ${SPAWN_TIMEOUT}ms. Reiniciando conexão...`);
     try { bot?.end(); } catch {}
@@ -115,28 +88,31 @@ function createBot() {
   bot.once('login', () => console.log(`Logado como ${bot.username}`));
 
   bot.once('spawn', () => {
-    clearSpawnWatchdog();
-    console.log('✅ Spawnado! Anti-AFK ligado.');
-
-    // ✅ Mini ação imediata (ajuda a “contar” como atividade)
-    bot.setControlState('jump', true);
-    setTimeout(() => bot?.setControlState('jump', false), 250);
-
-    startAntiAfk();
+    if (spawnWatchdog) clearTimeout(spawnWatchdog);
+    spawnWatchdog = null;
+    console.log('✅ Spawnado!');
   });
 
   bot.once('end', () => scheduleReconnect('end'));
-
-  bot.once('kicked', (reason) => {
-    console.log('🚫 Kicked:', reason);
-    scheduleReconnect('kicked');
-  });
 
   bot.once('error', (e) => {
     const code = e?.code || '';
     const msg = e?.message || String(e);
     console.log('💥 Error:', code, msg);
     scheduleReconnect(code || msg || 'error');
+  });
+
+  bot.once('kicked', (reason) => {
+    const reasonText = typeof reason === 'string' ? reason : JSON.stringify(reason);
+    console.log('🚫 Kicked:', reasonText);
+
+    if (shouldPauseOnKick(reasonText)) {
+      console.log('⛔ Kick indica bloqueio/idle/ToS. Pausando reconexões para evitar loop.');
+      cleanupBot();
+      return;
+    }
+
+    scheduleReconnect('kicked');
   });
 }
 
