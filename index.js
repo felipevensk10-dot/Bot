@@ -8,9 +8,10 @@ const WEB_PORT = process.env.PORT || 3000;
 app.listen(WEB_PORT, () => console.log('Web running on port', WEB_PORT));
 
 function parseMCVersion(v) {
-  if (!v) return '1.21.1'; // ✅ padrão fixo (mais estável no Railway)
+  // ✅ FIXO: 1.21.11 (false/auto/detect dá crash pra você)
+  if (!v) return '1.21.11';
   const s = String(v).trim().toLowerCase();
-  if (s === 'false' || s === 'auto' || s === 'detect') return '1.21.1'; // evita autoVersion bugando
+  if (s === 'false' || s === 'auto' || s === 'detect') return '1.21.11';
   return v;
 }
 
@@ -24,10 +25,13 @@ const config = {
 let bot = null;
 let antiAfkInterval = null;
 let reconnectTimer = null;
+let spawnWatchdog = null;
 
-let attempts = 0;
-const BASE_DELAY = 10_000;
-const MAX_DELAY = 180_000;
+// ✅ Reconexão fixa em 15 segundos (não cresce)
+const RECONNECT_DELAY = 15_000;
+
+// ✅ Se não spawnar em 30s, reinicia (evita ficar “conectado” mas inútil)
+const SPAWN_TIMEOUT = 30_000;
 
 function stopAntiAfk() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
@@ -59,8 +63,15 @@ function startAntiAfk() {
   }, 20_000);
 }
 
+function clearSpawnWatchdog() {
+  if (spawnWatchdog) clearTimeout(spawnWatchdog);
+  spawnWatchdog = null;
+}
+
 function cleanupBot() {
   stopAntiAfk();
+  clearSpawnWatchdog();
+
   if (bot) {
     try {
       bot.removeAllListeners();
@@ -75,17 +86,12 @@ function scheduleReconnect(reason) {
 
   cleanupBot();
 
-  attempts++;
-  const backoff = Math.min(MAX_DELAY, BASE_DELAY * attempts);
-  const jitter = Math.floor(Math.random() * 3000);
-  const wait = backoff + jitter;
-
-  console.log(`Caiu (${reason}). Reconectando em ${wait}ms...`);
+  console.log(`Caiu (${reason}). Reconectando em ${RECONNECT_DELAY}ms...`);
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     createBot();
-  }, wait);
+  }, RECONNECT_DELAY);
 }
 
 function createBot() {
@@ -99,17 +105,39 @@ function createBot() {
     return scheduleReconnect(e?.message || 'createBot error');
   }
 
+  // ✅ Watchdog: se não spawnar em 30s, força reinício
+  clearSpawnWatchdog();
+  spawnWatchdog = setTimeout(() => {
+    console.log(`⚠️ Não spawnou em ${SPAWN_TIMEOUT}ms. Reiniciando conexão...`);
+    try { bot?.end(); } catch {}
+  }, SPAWN_TIMEOUT);
+
   bot.once('login', () => console.log(`Logado como ${bot.username}`));
 
   bot.once('spawn', () => {
-    console.log('Spawnado! Anti-AFK ligado.');
-    attempts = 0;
+    clearSpawnWatchdog();
+    console.log('✅ Spawnado! Anti-AFK ligado.');
+
+    // ✅ Mini ação imediata (ajuda a “contar” como atividade)
+    bot.setControlState('jump', true);
+    setTimeout(() => bot?.setControlState('jump', false), 250);
+
     startAntiAfk();
   });
 
   bot.once('end', () => scheduleReconnect('end'));
-  bot.once('error', (e) => scheduleReconnect(e?.message || 'error'));
-  bot.once('kicked', () => scheduleReconnect('kicked'));
+
+  bot.once('kicked', (reason) => {
+    console.log('🚫 Kicked:', reason);
+    scheduleReconnect('kicked');
+  });
+
+  bot.once('error', (e) => {
+    const code = e?.code || '';
+    const msg = e?.message || String(e);
+    console.log('💥 Error:', code, msg);
+    scheduleReconnect(code || msg || 'error');
+  });
 }
 
 createBot();
