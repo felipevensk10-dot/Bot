@@ -15,9 +15,9 @@ function parseMCVersion(v) {
 }
 
 const config = {
-  host: process.env.MC_HOST || 'VillaF2.aternos.me',
-  port: Number(process.env.MC_PORT || 30864),
-  username: process.env.MC_USER || 'Bot24horasVF',
+  host: process.env.MC_HOST || 'SquadSuper.aternos.me',
+  port: Number(process.env.MC_PORT || 53867),
+  username: process.env.MC_USER || 'Bot24horas',
   version: parseMCVersion(process.env.MC_VERSION),
 };
 
@@ -113,3 +113,4 @@ function createBot() {
 }
 
 createBot();
+
