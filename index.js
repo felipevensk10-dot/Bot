@@ -25,9 +25,8 @@ let bot = null;
 let antiAfkInterval = null;
 let reconnectTimer = null;
 
-let attempts = 0;
-const BASE_DELAY = 10_000;
-const MAX_DELAY = 180_000;
+// ✅ Reconexão fixa
+const RECONNECT_DELAY = 15_000; // 15 segundos
 
 function stopAntiAfk() {
   if (antiAfkInterval) clearInterval(antiAfkInterval);
@@ -75,10 +74,8 @@ function scheduleReconnect(reason) {
 
   cleanupBot();
 
-  attempts++;
-  const backoff = Math.min(MAX_DELAY, BASE_DELAY * attempts);
-  const jitter = Math.floor(Math.random() * 3000);
-  const wait = backoff + jitter;
+  const jitter = Math.floor(Math.random() * 3000); // mantém seu jitter (0–3s)
+  const wait = RECONNECT_DELAY + jitter;
 
   console.log(`Caiu (${reason}). Reconectando em ${wait}ms...`);
 
@@ -103,7 +100,6 @@ function createBot() {
 
   bot.once('spawn', () => {
     console.log('Spawnado! Anti-AFK ligado.');
-    attempts = 0;
     startAntiAfk();
   });
 
@@ -113,4 +109,3 @@ function createBot() {
 }
 
 createBot();
-
